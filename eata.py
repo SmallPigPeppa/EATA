@@ -191,6 +191,7 @@ def configure_model(model):
     return model
 
 
+
 def check_model(model):
     """Check model for compatability with eata."""
     is_training = model.training

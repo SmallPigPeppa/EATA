@@ -10,7 +10,7 @@ from utils.utils import get_logger
 from utils.cli_utils import *
 from dataset.selectedRotateImageFolder import prepare_test_data
 
-import torch    
+import torch
 import torch.nn.functional as F
 import numpy as np
 
@@ -18,7 +18,6 @@ import tent
 import eata
 
 import models.Res as Resnet
-
 
 
 def validate(val_loader, model, criterion, args, mode='eval'):
@@ -54,13 +53,13 @@ def validate(val_loader, model, criterion, args, mode='eval'):
 
 
 def get_args():
-
     parser = argparse.ArgumentParser(description='PyTorch ImageNet-C Testing')
 
     # path of data, output dir
     parser.add_argument('--data', default='/dockerdata/imagenet', help='path to dataset')
     parser.add_argument('--data_corruption', default='/dockerdata/imagenet-c', help='path to corruption dataset')
-    parser.add_argument('--output', default='/apdcephfs/private_huberyniu/etta_exps/camera_ready_debugs', help='the output directory of this experiment')
+    parser.add_argument('--output', default='/apdcephfs/private_huberyniu/etta_exps/camera_ready_debugs',
+                        help='the output directory of this experiment')
 
     # general parameters, dataloader parameters
     parser.add_argument('--seed', default=2020, type=int, help='seed for initializing training. ')
@@ -75,23 +74,27 @@ def get_args():
     # dataset settings
     parser.add_argument('--level', default=5, type=int, help='corruption level of test(val) set.')
     parser.add_argument('--corruption', default='gaussian_noise', type=str, help='corruption type of test(val) set.')
-    parser.add_argument('--rotation', default=False, type=bool, help='if use the rotation ssl task for training (this is TTTs dataloader).')
+    parser.add_argument('--rotation', default=False, type=bool,
+                        help='if use the rotation ssl task for training (this is TTTs dataloader).')
 
     # model name, support resnets
     parser.add_argument('--arch', default='resnet50', type=str, help='the default model architecture')
 
     # eata settings
-    parser.add_argument('--fisher_size', default=2000, type=int, help='number of samples to compute fisher information matrix.')
-    parser.add_argument('--fisher_alpha', type=float, default=2000., help='the trade-off between entropy and regularization loss, in Eqn. (8)')
-    parser.add_argument('--e_margin', type=float, default=math.log(1000)*0.40, help='entropy margin E_0 in Eqn. (3) for filtering reliable samples')
-    parser.add_argument('--d_margin', type=float, default=0.05, help='\epsilon in Eqn. (5) for filtering redundant samples')
-    
+    parser.add_argument('--fisher_size', default=2000, type=int,
+                        help='number of samples to compute fisher information matrix.')
+    parser.add_argument('--fisher_alpha', type=float, default=2000.,
+                        help='the trade-off between entropy and regularization loss, in Eqn. (8)')
+    parser.add_argument('--e_margin', type=float, default=math.log(1000) * 0.40,
+                        help='entropy margin E_0 in Eqn. (3) for filtering reliable samples')
+    parser.add_argument('--d_margin', type=float, default=0.05,
+                        help='\epsilon in Eqn. (5) for filtering redundant samples')
 
     # overall experimental settings
-    parser.add_argument('--exp_type', default='continual', type=str, help='continual or each_shift_reset') 
+    parser.add_argument('--exp_type', default='continual', type=str, help='continual or each_shift_reset')
     # 'cotinual' means the model parameters will never be reset, also called online adaptation; 
     # 'each_shift_reset' means after each type of distribution shift, e.g., ImageNet-C Gaussian Noise Level 5, the model parameters will be reset.
-    parser.add_argument('--algorithm', default='eta', type=str, help='eata or eta or tent')  
+    parser.add_argument('--algorithm', default='eta', type=str, help='eata or eta or tent')
 
     return parser.parse_args()
 
@@ -105,8 +108,15 @@ if __name__ == '__main__':
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-
-    subnet = Resnet.__dict__[args.arch](pretrained=True)
+    if not args.algorithm == 're_param':
+        subnet = Resnet.__dict__[args.arch](pretrained=True)
+    else:
+        from models.resnet_modified import resnet50,get_modified_state_dict
+        subnet = resnet50()
+        modified_state_dict=get_modified_state_dict(model_name='resnet50')
+        subnet.load_state_dict(state_dict=modified_state_dict,strict=False)
+        subnet.clean_expansions()
+        subnet.set_expansions(use_expansion=True)
 
     # subnet.load_state_dict(init)
     subnet = subnet.cuda()
@@ -114,9 +124,12 @@ if __name__ == '__main__':
     if not os.path.exists(args.output):
         os.makedirs(args.output, exist_ok=True)
 
-    logger = get_logger(name="project", output_directory=args.output, log_name=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())+"-log.txt", debug=False)
-    
-    common_corruptions = ['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+    logger = get_logger(name="project", output_directory=args.output,
+                        log_name=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime()) + "-log.txt", debug=False)
+
+    common_corruptions = ['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur',
+                          'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform',
+                          'pixelate', 'jpeg_compression']
     logger.info(args)
 
     if args.exp_type == 'continual':
@@ -133,6 +146,11 @@ if __name__ == '__main__':
         params, param_names = tent.collect_params(subnet)
         optimizer = torch.optim.SGD(params, 0.00025, momentum=0.9)
         adapt_model = tent.Tent(subnet, optimizer)
+    elif args.algorithm == 're_param':
+        # subnet = eata.configure_model(subnet)
+        params, param_names = eata.collect_params(subnet)
+        optimizer = torch.optim.SGD(params, 0.00025, momentum=0.9)
+        adapt_model = eata.EATA(subnet, optimizer, e_margin=args.e_margin, d_margin=args.d_margin)
     elif args.algorithm == 'eta':
         subnet = eata.configure_model(subnet)
         params, param_names = eata.collect_params(subnet)
@@ -150,7 +168,7 @@ if __name__ == '__main__':
         ewc_optimizer = torch.optim.SGD(params, 0.001)
         fishers = {}
         train_loss_fn = nn.CrossEntropyLoss().cuda()
-        for iter_, (images, targets) in enumerate(fisher_loader, start=1):      
+        for iter_, (images, targets) in enumerate(fisher_loader, start=1):
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
             if torch.cuda.is_available():
@@ -173,26 +191,54 @@ if __name__ == '__main__':
         del ewc_optimizer
 
         optimizer = torch.optim.SGD(params, 0.00025, momentum=0.9)
-        adapt_model = eata.EATA(subnet, optimizer, fishers, args.fisher_alpha, e_margin=args.e_margin, d_margin=args.d_margin)
+        adapt_model = eata.EATA(subnet, optimizer, fishers, args.fisher_alpha, e_margin=args.e_margin,
+                                d_margin=args.d_margin)
     else:
         assert False, NotImplementedError
 
-    for corrupt in common_corruptions:
-        if args.exp_type == 'each_shift_reset':
-            adapt_model.reset()
-        elif args.exp_type == 'continual':
-            print("continue")
-        else:
-            assert False, NotImplementedError
+    if not args.algorithm == 're_param':
+        for corrupt in common_corruptions:
+            if args.exp_type == 'each_shift_reset':
+                adapt_model.reset()
+            elif args.exp_type == 'continual':
+                print("continue")
+            else:
+                assert False, NotImplementedError
 
-        args.corruption = corrupt
-        logger.info(args.corruption)
+            args.corruption = corrupt
+            logger.info(args.corruption)
 
-        val_dataset, val_loader = prepare_test_data(args)
-        val_dataset.switch_mode(True, False)
+            val_dataset, val_loader = prepare_test_data(args)
+            val_dataset.switch_mode(True, False)
 
-        top1, top5 = validate(val_loader, adapt_model, None, args, mode='eval')
-        logger.info(f"Under shift type {args.corruption} After {args.algorithm} Top-1 Accuracy: {top1:.5f} and Top-5 Accuracy: {top5:.5f}")
-        if args.algorithm in ['eata', 'eta']:
-            logger.info(f"num of reliable samples is {adapt_model.num_samples_update_1}, num of reliable+non-redundant samples is {adapt_model.num_samples_update_2}")
-            adapt_model.num_samples_update_1, adapt_model.num_samples_update_2 = 0, 0
+            top1, top5 = validate(val_loader, adapt_model, None, args, mode='eval')
+            logger.info(
+                f"Under shift type {args.corruption} After {args.algorithm} Top-1 Accuracy: {top1:.5f} and Top-5 Accuracy: {top5:.5f}")
+            if args.algorithm in ['eata', 'eta']:
+                logger.info(
+                    f"num of reliable samples is {adapt_model.num_samples_update_1}, num of reliable+non-redundant samples is {adapt_model.num_samples_update_2}")
+                adapt_model.num_samples_update_1, adapt_model.num_samples_update_2 = 0, 0
+    else:
+        for corrupt in common_corruptions:
+            if args.exp_type == 'each_shift_reset':
+                adapt_model.reset()
+            elif args.exp_type == 'continual':
+                print("continue")
+            else:
+                assert False, NotImplementedError
+            # for new task, clean expansion and use expansion
+            adapt_model.model.clean_expansions()
+            adapt_model.model.set_expansions(use_expansion=True)
+
+            args.corruption = corrupt
+            logger.info(args.corruption)
+
+            val_dataset, val_loader = prepare_test_data(args)
+            val_dataset.switch_mode(True, False)
+            top1, top5 = validate(val_loader, adapt_model, None, args, mode='eval')
+            logger.info(
+                f"Under shift type {args.corruption} After {args.algorithm} Top-1 Accuracy: {top1:.5f} and Top-5 Accuracy: {top5:.5f}")
+            if args.algorithm in ['eata', 'eta']:
+                logger.info(
+                    f"num of reliable samples is {adapt_model.num_samples_update_1}, num of reliable+non-redundant samples is {adapt_model.num_samples_update_2}")
+                adapt_model.num_samples_update_1, adapt_model.num_samples_update_2 = 0, 0
