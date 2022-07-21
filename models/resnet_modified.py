@@ -235,7 +235,7 @@ class ResNet(nn.Module):
                 # print(module)
                 module.re_param()
 
-    def zero_expansions(self):
+    def clean_expansions(self):
         for module in self.modules():
             if hasattr(module, 'zero_expansion'):
                 # print(module)
